@@ -357,17 +357,18 @@ async def randomdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"a {mention} no le agarró el daun todavía 😌",
    ]
 
-# elegimos al azar
-eleccion = random.choice([0, 1])  # 0 = ON, 1 = a salvo
+    # elegimos al azar
+    eleccion = random.choice([0, 1])  # 0 = ON, 1 = a salvo
 
-if eleccion == 0:
-    # mensaje ON
-    await update.message.reply_text(respuestas[0])
-    # marcar como "mogólico del día"
-    mark_selection_today(chat.id, row[0], today_key())
-else:
-    # mensaje a salvo
-    await update.message.reply_text(respuestas[1])
+    if eleccion == 0:
+        # mensaje ON
+        await update.message.reply_text(respuestas[0])
+        # marcar como "mogólico del día"
+        mark_selection_today(chat.id, row[0], today_key())
+    else:
+        # mensaje a salvo
+        await update.message.reply_text(respuestas[1])
+
 
 # ===================== Reset diario =====================
 
