@@ -1,0 +1,11 @@
+# Nunca subir secretos
+.env
+
+# Base de datos local
+*.db
+
+# Entorno virtual
+.venv/
+
+# Archivos de caché de Python
+__pycache__/
