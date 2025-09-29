@@ -304,8 +304,6 @@ async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # además pasa a "personaje del día"
         mark_selection_today(chat.id, dest_id, day)
 
-
-
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     day = today_key()
