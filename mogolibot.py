@@ -294,17 +294,17 @@ async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-   # aviso si total recibido del día alcanza o supera el umbral (>= 21)
-total_rec = get_received_today(chat.id, dest_id, day)
-if total_rec >= ALERT_THRESHOLD:
-    await update.message.reply_text(
-        f"¡{dest_mention} recibió {total_rec} cromosomas (≥ {ALERT_THRESHOLD})!",
-        parse_mode=ParseMode.MARKDOWN
-    )
-    # además pasa a "personaje del día"
-    mark_selection_today(chat.id, dest_id, day)
-
+    # aviso si total recibido del día alcanza o supera el umbral (>= 21)
+    total_rec = get_received_today(chat.id, dest_id, day)
+    if total_rec >= ALERT_THRESHOLD:
+        await update.message.reply_text(
+            f"¡{dest_mention} recibió {total_rec} cromosomas (≥ {ALERT_THRESHOLD})!",
+            parse_mode=ParseMode.MARKDOWN
         )
+        # además pasa a "personaje del día"
+        mark_selection_today(chat.id, dest_id, day)
+
+
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
