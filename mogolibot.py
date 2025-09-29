@@ -31,7 +31,6 @@ SPECIAL_USERS = {
     "luz_nasser": "Ella no, pero vos sí."
 }
 
-
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]{5,})")
 
 # ===================== DB =====================
@@ -113,7 +112,6 @@ def get_recent_users(chat_id: int):
         filtered.append((uid, uname))
     return filtered
 
-
 def ensure_stats_row(chat_id: int, user_id: int, day):
     with db() as conn:
         conn.execute("""
@@ -191,6 +189,50 @@ def list_today_highlights(chat_id: int, day):
 def format_mention(uid: int, uname: str):
     return f"@{uname}" if uname else f"[usuario](tg://user?id={uid})"
 
+# ---------- NUEVO: resolver destinatario por reply / @usuario / user_id ----------
+
+def resolve_target_from_update(update: Update, text: str):
+    """
+    Devuelve (user_id, username_str) o None.
+    Prioridad:
+      1) Reply a un mensaje
+      2) @usuario en el texto
+      3) user_id numérico en el texto
+    """
+    chat_id = update.effective_chat.id
+
+    # 1) Si el comando es reply a un mensaje, usamos a esa persona
+    if update.message and update.message.reply_to_message:
+        u = update.message.reply_to_message.from_user
+        seen_user(chat_id, u.id, u.username)
+        return u.id, (u.username or "")
+
+    # 2) @usuario
+    m = MENTION_RE.search(text or "")
+    if m:
+        uname = m.group(1)
+        with db() as conn:
+            row = conn.execute("""
+                SELECT user_id, COALESCE(username,'') FROM users
+                 WHERE chat_id=? AND LOWER(username)=LOWER(?)
+            """, (chat_id, uname)).fetchone()
+        if row:
+            return row[0], row[1]
+
+    # 3) user_id numérico
+    nums = re.findall(r"\d{6,}", text or "")
+    if nums:
+        uid = int(nums[-1])
+        with db() as conn:
+            row = conn.execute("""
+                SELECT user_id, COALESCE(username,'') FROM users
+                 WHERE chat_id=? AND user_id=?
+            """, (chat_id, uid)).fetchone()
+        if row:
+            return row[0], row[1]
+
+    return None
+
 # ===================== Handlers =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,16 +241,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Comandos:\n"
         "• /down — Elige el mogólico del día\n"
         "• /regalar @usuario cantidad — Regalar cromosomas (de tu saldo)\n"
+        "   También podés: responder a un mensaje con /regalar 10, o usar /regalar <user_id> 10\n"
         "• /check — Mogolicos del día (>21 recibidos + random del día)\n"
-        "• /randomdown @usuario — chequea si el usuario es mogólico"
+        "• /randomdown @usuario — chequea si el usuario es mogólico\n"
+        "   También funciona respondiendo a un mensaje o con user_id."
     )
 
 async def comandos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "/down - Elige el mogólico del día\n"
         "/regalar @usuario cantidad — Regalar cromosomas (de tu saldo)\n"
+        "   También: responder a un mensaje con /regalar 10, o /regalar <user_id> 10\n"
         "/check - Mogolicos del día (>21 recibidos + random del día)\n"
-        "/randomdown @usuario — chequea si el usuario es mogólico"
+        "/randomdown @usuario — chequea si el usuario es mogólico (o reply / user_id)"
     )
 
 async def seen_member(update: Update, _: ContextTypes.DEFAULT_TYPE):
@@ -245,28 +290,19 @@ async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     seen_user(chat.id, sender.id, sender.username)
 
-    m = MENTION_RE.search(text)
+    # --- NUEVO: resolver destinatario por reply / @usuario / id ---
+    target = resolve_target_from_update(update, text)
+    # monto: último número en el texto
     nums = re.findall(r"\d+", text)
-    if not (m and nums):
-        await update.message.reply_text("Uso: /regalar @usuario cantidad (ej: /regalar @pepito 10)")
+    amount = int(nums[-1]) if nums else None
+
+    if not target or amount is None or amount <= 0:
+        await update.message.reply_text("Uso: /regalar @usuario cantidad (ej: /regalar @pepito 10)\n"
+                                        "     o responder con /regalar 10\n"
+                                        "     o /regalar <user_id> 10")
         return
 
-    uname = m.group(1)
-    amount = int(nums[-1])
-    if amount <= 0:
-        await update.message.reply_text("La cantidad debe ser mayor a 0.")
-        return
-
-    # buscar destinatario por username
-    with db() as conn:
-        row = conn.execute("""
-            SELECT user_id, COALESCE(username,'') FROM users
-             WHERE chat_id=? AND username=?
-        """, (chat.id, uname)).fetchone()
-    if not row:
-        await update.message.reply_text("No encuentro a ese usuario (todavía no lo vi activo en este grupo).")
-        return
-    dest_id, dest_uname = row
+    dest_id, dest_uname = target
 
     if dest_id == sender.id:
         await update.message.reply_text("No podés regalarte a vos mismo.")
@@ -288,7 +324,7 @@ async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_stats_row(chat.id, dest_id, day)
     add_given_received(chat.id, sender.id, dest_id, amount, day)
 
-    dest_mention = format_mention(dest_id, dest_uname or uname)
+    dest_mention = format_mention(dest_id, dest_uname or "")
     await update.message.reply_text(
         f"Listo: regalaste {amount} cromosomas a {dest_mention}. Te quedan {new_bal}.",
         parse_mode=ParseMode.MARKDOWN
@@ -298,7 +334,7 @@ async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_rec = get_received_today(chat.id, dest_id, day)
     if total_rec >= ALERT_THRESHOLD:
         await update.message.reply_text(
-            f"¡{dest_mention} recibió {total_rec} cromosomas (≥ {ALERT_THRESHOLD})!",
+            f"¡{dest_mention} es mogólico!  (≥ {ALERT_THRESHOLD})!",
             parse_mode=ParseMode.MARKDOWN
         )
         # además pasa a "personaje del día"
@@ -334,22 +370,17 @@ async def randomdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     text = update.message.text or ""
 
-    m = MENTION_RE.search(text)
-    if not m:
-        await update.message.reply_text("Uso: /randomdown @usuario")
+    # NUEVO: aceptar reply / @usuario / id
+    target = resolve_target_from_update(update, text)
+    if not target:
+        await update.message.reply_text("Uso: /randomdown @usuario\n"
+                                        "     o responder con /randomdown\n"
+                                        "     o /randomdown <user_id>")
         return
 
-    uname = m.group(1)
-    # verificar que lo conozcamos en este chat
-    with db() as conn:
-        row = conn.execute("""
-            SELECT user_id FROM users WHERE chat_id=? AND username=?
-        """, (chat.id, uname)).fetchone()
-    if not row:
-        await update.message.reply_text("No encuentro a ese usuario (todavía no lo vi activo en este grupo).")
-        return
+    target_id, target_uname = target
+    mention = format_mention(target_id, target_uname or "")
 
-    mention = f"@{uname}"
     respuestas = [
         f"{mention} está re mogólico hoy 🔥",
         f"a {mention} no le agarró el daun todavía 😌",
@@ -360,12 +391,12 @@ async def randomdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if eleccion == 0:
         # mensaje ON
-        await update.message.reply_text(respuestas[0])
+        await update.message.reply_text(respuestas[0], parse_mode=ParseMode.MARKDOWN)
         # marcar como "mogólico del día"
-        mark_selection_today(chat.id, row[0], today_key())
+        mark_selection_today(chat.id, target_id, today_key())
     else:
         # mensaje a salvo
-        await update.message.reply_text(respuestas[1])
+        await update.message.reply_text(respuestas[1], parse_mode=ParseMode.MARKDOWN)
 
 
 # ===================== Reset diario =====================
