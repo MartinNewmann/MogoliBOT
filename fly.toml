@@ -1,16 +1,9 @@
+# fly.toml para un bot (sin HTTP)
 app = "elmogolicobot"
 primary_region = "gru"
 
-[build]
-  dockerfile = "Dockerfile"
-
-[http_service]
-  internal_port = 8080      # el puerto interno (aunque tu bot no lo use)
-  force_https = true
-  auto_stop_machines = "off"   # 🔴 desactiva el autostop
-  auto_start_machines = true
-  min_machines_running = 1     # 🔴 asegura al menos 1 máquina encendida
-  processes = ["app"]
+[processes]
+  app = "python mogolibot.py"
 
 [[vm]]
   memory = "1gb"
