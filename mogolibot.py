@@ -25,9 +25,9 @@ RECENT_DAYS_WINDOW = 7
 DAILY_START_BALANCE = 75      # saldo después de cada reset diario (21hs AR)
 ALERT_THRESHOLD = 21          # si un usuario recibe >21 en el día, avisar
 
-# --- Inmunidad configurable por chat (sin hardcodear usuarios) ---
-IMMUNE_USERS = set()  # vacío: no hay inmunes por default, los administrás vía comandos privados
-OWNER_ID = int(os.getenv("OWNER_ID", "5285094498"))  # <- TU ID
+# Inmunidad configurable por chat (sin hardcodear usuarios)
+IMMUNE_USERS = set()  # por si querés forzar algo global desde .env en el futuro
+OWNER_ID = int(os.getenv("OWNER_ID", "5285094498"))  # tu ID (ya cargado)
 
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]{5,})")
 
@@ -70,14 +70,14 @@ def init_db():
           FOREIGN KEY (chat_id, user_id) REFERENCES users(chat_id, user_id) ON DELETE CASCADE
         );
 
-        -- usuarios inmunes por ID (por chat)
+        -- inmunes por ID (sin expresiones en la PK)
         CREATE TABLE IF NOT EXISTS immune_id (
           chat_id INTEGER NOT NULL,
           user_id INTEGER NOT NULL,
           PRIMARY KEY (chat_id, user_id)
         );
 
-        -- usuarios inmunes por username (case-insensitive) por chat
+        -- inmunes por username (case-insensitive)
         CREATE TABLE IF NOT EXISTS immune_username (
           chat_id  INTEGER NOT NULL,
           username TEXT COLLATE NOCASE NOT NULL,
@@ -112,81 +112,76 @@ def is_user_immune(chat_id: int, user_id: int | None, username: str | None) -> b
     if uname_lc in IMMUNE_USERS:
         return True
     with db() as conn:
-        if user_id is not None:
-            row = conn.execute(
+        if user_id:
+            if conn.execute(
                 "SELECT 1 FROM immune_id WHERE chat_id=? AND user_id=?",
                 (chat_id, user_id)
-            ).fetchone()
-            if row:
+            ).fetchone():
                 return True
         if uname_lc:
-            row = conn.execute(
+            if conn.execute(
                 "SELECT 1 FROM immune_username WHERE chat_id=? AND username=?",
                 (chat_id, uname_lc)
-            ).fetchone()
-            if row:
+            ).fetchone():
                 return True
     return False
 
 def add_immune(chat_id: int, user_id: int | None, username: str | None) -> bool:
     with db() as conn:
         try:
-            if user_id is not None:
+            if user_id:
                 conn.execute(
                     "INSERT OR IGNORE INTO immune_id (chat_id, user_id) VALUES (?, ?)",
                     (chat_id, user_id)
                 )
-                return True
-            uname_lc = (username or "").strip().lower()
-            if uname_lc:
+            if username:
                 conn.execute(
                     "INSERT OR IGNORE INTO immune_username (chat_id, username) VALUES (?, ?)",
-                    (chat_id, uname_lc)
+                    (chat_id, username.lower())
                 )
-                return True
-            return False
+            return True
         except Exception:
             return False
 
 def remove_immune(chat_id: int, user_id: int | None, username: str | None) -> int:
+    uname_lc = (username or "").lower()
     with db() as conn:
-        if user_id is not None:
-            cur = conn.execute(
+        total = 0
+        if user_id:
+            total += conn.execute(
                 "DELETE FROM immune_id WHERE chat_id=? AND user_id=?",
                 (chat_id, user_id)
-            )
-            return cur.rowcount
-        uname_lc = (username or "").strip().lower()
+            ).rowcount
         if uname_lc:
-            cur = conn.execute(
+            total += conn.execute(
                 "DELETE FROM immune_username WHERE chat_id=? AND username=?",
                 (chat_id, uname_lc)
-            )
-            return cur.rowcount
-        return 0
+            ).rowcount
+        return total
 
 def list_immunes(chat_id: int):
     with db() as conn:
         rows_id = conn.execute(
-            "SELECT user_id, '' FROM immune_id WHERE chat_id=?",
+            "SELECT user_id FROM immune_id WHERE chat_id=?",
             (chat_id,)
         ).fetchall()
         rows_un = conn.execute(
-            "SELECT 0, username FROM immune_username WHERE chat_id=?",
+            "SELECT username FROM immune_username WHERE chat_id=?",
             (chat_id,)
         ).fetchall()
-    return rows_id + rows_un
+    # Devolvemos [(uid, ''), (0, 'username'), ...]
+    return [(r[0], "") for r in rows_id] + [(0, r[0]) for r in rows_un]
 
 def get_recent_users(chat_id: int):
     cutoff = now_utc() - timedelta(days=RECENT_DAYS_WINDOW)
     with db() as conn:
         rows = conn.execute("""
             SELECT user_id, COALESCE(username, '')
-              FROM users
-             WHERE chat_id=? AND last_seen >= ?
+            FROM users
+            WHERE chat_id=? AND last_seen >= ?
         """, (chat_id, cutoff.isoformat())).fetchall()
 
-    # excluir inmunes (por id o username)
+    # excluir inmunes por id/username (comparación en minúsculas)
     filtered = []
     for uid, uname in rows:
         if is_user_immune(chat_id, uid, uname):
@@ -272,6 +267,7 @@ def format_mention(uid: int, uname: str):
     return f"@{uname}" if uname else f"[usuario](tg://user?id={uid})"
 
 # ---------- Resolver destinatario por reply / @usuario / user_id ----------
+
 def resolve_target_from_update(update: Update, text: str):
     """
     Devuelve (user_id, username_str) o None.
@@ -655,7 +651,8 @@ def do_daily_reset(context: ContextTypes.DEFAULT_TYPE):
     # A las 00:00 UTC (21:00 AR): setear balances a 75
     with db() as conn:
         conn.execute("UPDATE users SET balance=?", (DAILY_START_BALANCE,))
-    # /check mira solo el 'day' actual, así que en el nuevo día los contadores empiezan en 0 naturalmente.
+    # No limpiamos tablas diarias: /check mira solo el 'day' actual,
+    # así que en el nuevo día los contadores empiezan en 0 naturalmente.
 
 # ===================== Main =====================
 
