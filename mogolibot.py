@@ -70,12 +70,18 @@ def init_db():
           FOREIGN KEY (chat_id, user_id) REFERENCES users(chat_id, user_id) ON DELETE CASCADE
         );
 
-        -- usuarios inmunes por chat
-        CREATE TABLE IF NOT EXISTS immune (
-          chat_id   INTEGER NOT NULL,
-          user_id   INTEGER,
-          username  TEXT,
-          PRIMARY KEY (chat_id, COALESCE(user_id, -1), COALESCE(username, ''))
+        -- usuarios inmunes por ID (por chat)
+        CREATE TABLE IF NOT EXISTS immune_id (
+          chat_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          PRIMARY KEY (chat_id, user_id)
+        );
+
+        -- usuarios inmunes por username (case-insensitive) por chat
+        CREATE TABLE IF NOT EXISTS immune_username (
+          chat_id  INTEGER NOT NULL,
+          username TEXT COLLATE NOCASE NOT NULL,
+          PRIMARY KEY (chat_id, username)
         );
         """)
     print("DB OK")
@@ -106,16 +112,16 @@ def is_user_immune(chat_id: int, user_id: int | None, username: str | None) -> b
     if uname_lc in IMMUNE_USERS:
         return True
     with db() as conn:
-        if user_id:
+        if user_id is not None:
             row = conn.execute(
-                "SELECT 1 FROM immune WHERE chat_id=? AND user_id=?",
+                "SELECT 1 FROM immune_id WHERE chat_id=? AND user_id=?",
                 (chat_id, user_id)
             ).fetchone()
             if row:
                 return True
         if uname_lc:
             row = conn.execute(
-                "SELECT 1 FROM immune WHERE chat_id=? AND LOWER(username)=?",
+                "SELECT 1 FROM immune_username WHERE chat_id=? AND username=?",
                 (chat_id, uname_lc)
             ).fetchone()
             if row:
@@ -125,26 +131,35 @@ def is_user_immune(chat_id: int, user_id: int | None, username: str | None) -> b
 def add_immune(chat_id: int, user_id: int | None, username: str | None) -> bool:
     with db() as conn:
         try:
-            conn.execute(
-                "INSERT OR IGNORE INTO immune (chat_id, user_id, username) VALUES (?, ?, ?)",
-                (chat_id, user_id, username)
-            )
-            return True
+            if user_id is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO immune_id (chat_id, user_id) VALUES (?, ?)",
+                    (chat_id, user_id)
+                )
+                return True
+            uname_lc = (username or "").strip().lower()
+            if uname_lc:
+                conn.execute(
+                    "INSERT OR IGNORE INTO immune_username (chat_id, username) VALUES (?, ?)",
+                    (chat_id, uname_lc)
+                )
+                return True
+            return False
         except Exception:
             return False
 
 def remove_immune(chat_id: int, user_id: int | None, username: str | None) -> int:
-    uname_lc = (username or "").lower()
     with db() as conn:
-        if user_id:
+        if user_id is not None:
             cur = conn.execute(
-                "DELETE FROM immune WHERE chat_id=? AND user_id=?",
+                "DELETE FROM immune_id WHERE chat_id=? AND user_id=?",
                 (chat_id, user_id)
             )
             return cur.rowcount
-        elif uname_lc:
+        uname_lc = (username or "").strip().lower()
+        if uname_lc:
             cur = conn.execute(
-                "DELETE FROM immune WHERE chat_id=? AND LOWER(username)=?",
+                "DELETE FROM immune_username WHERE chat_id=? AND username=?",
                 (chat_id, uname_lc)
             )
             return cur.rowcount
@@ -152,11 +167,15 @@ def remove_immune(chat_id: int, user_id: int | None, username: str | None) -> in
 
 def list_immunes(chat_id: int):
     with db() as conn:
-        rows = conn.execute(
-            "SELECT COALESCE(user_id, 0), COALESCE(username,'') FROM immune WHERE chat_id=?",
+        rows_id = conn.execute(
+            "SELECT user_id, '' FROM immune_id WHERE chat_id=?",
             (chat_id,)
         ).fetchall()
-    return rows
+        rows_un = conn.execute(
+            "SELECT 0, username FROM immune_username WHERE chat_id=?",
+            (chat_id,)
+        ).fetchall()
+    return rows_id + rows_un
 
 def get_recent_users(chat_id: int):
     cutoff = now_utc() - timedelta(days=RECENT_DAYS_WINDOW)
