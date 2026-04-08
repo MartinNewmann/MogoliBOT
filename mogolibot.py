@@ -95,6 +95,27 @@ SYSTEM_PROMPT = (
     "No agregués nada más cuando generes imágenes. Solo esa línea."
 )
 
+# ── Tweet library — ejemplos reales de @alferdez ─────────
+def _load_tweet_examples(path="alberto_tweets.json", n=25):
+    """Carga tweets reales de Alberto y devuelve un bloque de texto para el prompt."""
+    try:
+        import random as _rnd
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        tweets = data.get("tweets", [])
+        if not tweets:
+            return ""
+        sample = _rnd.sample(tweets, min(n, len(tweets)))
+        lines  = "\n".join(f'- "{t}"' for t in sample)
+        return (
+            "\n\nEJEMPLOS REALES DE TUS TWEETS — así escribís vos, copiá exactamente este estilo:\n"
+            + lines
+        )
+    except Exception:
+        return ""
+
+SYSTEM_PROMPT = SYSTEM_PROMPT + _load_tweet_examples()
+
 # ── AI state ─────────────────────────────────────────────
 conversation_history = {}
 last_photo           = {}
