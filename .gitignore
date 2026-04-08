@@ -1,11 +1,12 @@
-# Nunca subir secretos
 .env
-
-# Base de datos local
-*.db
-
-# Entorno virtual
-.venv/
-
-# Archivos de caché de Python
+*.env
 __pycache__/
+*.pyc
+*.pyo
+.pythonlibs/
+.local/
+.config/
+.cache/
+*.log
+.replit
+replit.nix
