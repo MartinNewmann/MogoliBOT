@@ -598,6 +598,26 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("📋 *Lista del día*\n" + "\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
+async def lista_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT user_id, COALESCE(username,''), balance, last_seen
+            FROM users WHERE chat_id=?
+            ORDER BY balance DESC
+        """, (chat.id,)).fetchall()
+    if not rows:
+        await update.message.reply_text("No hay usuarios registrados todavía. El bot va aprendiendo quiénes son a medida que hablan.")
+        return
+    lines = [f"*👥 Usuarios registrados ({len(rows)}):*"]
+    for uid, uname, balance, last_seen in rows:
+        mention = f"@{uname}" if uname else f"ID {uid}"
+        lines.append(f"• {mention} — {balance} cromosomas")
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n…"
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
 async def randomdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     text = update.message.text or ""
@@ -681,6 +701,7 @@ def build_app():
     app.add_handler(CommandHandler("regalar",   regalar))
     app.add_handler(CommandHandler("check",     check_cmd))
     app.add_handler(CommandHandler("randomdown", randomdown))
+    app.add_handler(CommandHandler("lista",      lista_usuarios))
 
     app.add_handler(ChatMemberHandler(seen_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
