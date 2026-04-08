@@ -138,28 +138,36 @@ def fetch_riesgo_pais():
         pass
     return None
 
-def fetch_infobae_news():
+INFOBAE_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+INFOBAE_BASE    = "https://www.infobae.com/arc/outboundfeeds/rss/category"
+
+def _parse_infobae_rss(url, limit=8):
+    req = urllib.request.Request(url, headers=INFOBAE_HEADERS)
+    with urllib.request.urlopen(req, timeout=10) as r:
+        content = r.read().decode("utf-8", errors="ignore")
+    items = re.findall(r"<item>(.*?)</item>", content, re.DOTALL)
+    lines = []
+    for item in items[:limit]:
+        t = re.search(r"<title>(.*?)</title>", item)
+        d = re.search(r"<description>(.*?)</description>", item, re.DOTALL)
+        title = re.sub(r"<!\[CDATA\[|\]\]>", "", t.group(1)).strip() if t else ""
+        desc  = re.sub(r"<[^>]+>|<!\[CDATA\[|\]\]>", "", d.group(1)).strip()[:200] if d else ""
+        if title:
+            lines.append(f"  • {title}" + (f": {desc}" if desc else ""))
+    return lines
+
+def fetch_infobae_news(sections=("politica",)):
     try:
-        req = urllib.request.Request(
-            "https://www.infobae.com/feeds/rss/",
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            content = r.read().decode("utf-8", errors="ignore")
-        items = re.findall(r"<item>(.*?)</item>", content, re.DOTALL)
-        lines = ["Últimas noticias de Infobae (tiempo real):"]
-        for item in items[:10]:
-            title = re.search(r"<title><!\[CDATA\[(.*?)\]\]></title>", item)
-            if not title:
-                title = re.search(r"<title>(.*?)</title>", item)
-            desc = re.search(r"<description><!\[CDATA\[(.*?)\]\]></description>", item, re.DOTALL)
-            if not desc:
-                desc = re.search(r"<description>(.*?)</description>", item, re.DOTALL)
-            t = title.group(1).strip() if title else ""
-            d = re.sub(r"<[^>]+>", "", desc.group(1)).strip()[:200] if desc else ""
-            if t:
-                lines.append(f"  • {t}" + (f": {d}" if d else ""))
-        return "\n".join(lines) if len(lines) > 1 else None
+        all_lines = []
+        seen = set()
+        for sec in sections:
+            url = f"{INFOBAE_BASE}/{sec}/"
+            for line in _parse_infobae_rss(url):
+                if line not in seen:
+                    seen.add(line)
+                    all_lines.append(line)
+        if all_lines:
+            return "Últimas noticias de Infobae (tiempo real):\n" + "\n".join(all_lines)
     except Exception:
         pass
     return None
@@ -174,18 +182,24 @@ def get_realtime_context(text):
     needs_riesgo = any(k in text_low for k in [
         "riesgo país", "riesgo pais", "riesgo-país", "embi", "bono"
     ])
-    needs_news = any(k in text_low for k in [
-        "noticia", "infobae", "qué pasó", "que paso", "último", "ultimo",
-        "ahora", "reciente", "hoy", "actualidad", "novedades",
+    needs_politica = any(k in text_low for k in [
         "gobierno", "presidente", "milei", "javier", "kicillof", "villarruel",
         "caputo", "francos", "bullrich", "adorni", "congreso", "senado",
         "diputados", "ministerio", "ministro", "secretaría", "secretaria",
         "casa rosada", "nación", "nacion", "política", "politica",
         "kirchner", "cristina", "peronismo", "peronista", "oposición", "oposicion",
         "elecciones", "elección", "eleccion", "candidato", "partido",
-        "economía", "economia", "inflación", "inflacion", "pobreza",
         "seguridad", "crimen", "policía", "policia", "juicio", "juez",
-        "suprema corte", "corte suprema", "justicia"
+        "suprema corte", "corte suprema", "justicia", "libertad avanza", "la libertad"
+    ])
+    needs_economia = any(k in text_low for k in [
+        "economía", "economia", "inflación", "inflacion", "pobreza",
+        "fmi", "reservas", "bcra", "merval", "bolsa", "deuda",
+        "exportaciones", "importaciones", "industria", "pbi", "recesion", "recesión"
+    ])
+    needs_general = any(k in text_low for k in [
+        "noticia", "infobae", "qué pasó", "que paso", "último", "ultimo",
+        "ahora", "reciente", "hoy", "actualidad", "novedades"
     ])
 
     if needs_dollar:
@@ -196,8 +210,16 @@ def get_realtime_context(text):
         r = fetch_riesgo_pais()
         if r:
             parts.append(r)
-    if needs_news:
-        n = fetch_infobae_news()
+
+    sections = []
+    if needs_politica:
+        sections.append("politica")
+    if needs_economia:
+        sections.append("economia")
+    if needs_general and not sections:
+        sections.append("politica")
+    if sections:
+        n = fetch_infobae_news(sections=sections)
         if n:
             parts.append(n)
 
