@@ -146,12 +146,20 @@ def fetch_infobae_news():
         )
         with urllib.request.urlopen(req, timeout=10) as r:
             content = r.read().decode("utf-8", errors="ignore")
-        titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", content)
-        if not titles:
-            titles = re.findall(r"<title>(.*?)</title>", content)
-        titles = [t.strip() for t in titles if t.strip() and "Infobae" not in t][:8]
-        if titles:
-            return "Últimas noticias de Infobae:\n" + "\n".join(f"  • {t}" for t in titles)
+        items = re.findall(r"<item>(.*?)</item>", content, re.DOTALL)
+        lines = ["Últimas noticias de Infobae (tiempo real):"]
+        for item in items[:10]:
+            title = re.search(r"<title><!\[CDATA\[(.*?)\]\]></title>", item)
+            if not title:
+                title = re.search(r"<title>(.*?)</title>", item)
+            desc = re.search(r"<description><!\[CDATA\[(.*?)\]\]></description>", item, re.DOTALL)
+            if not desc:
+                desc = re.search(r"<description>(.*?)</description>", item, re.DOTALL)
+            t = title.group(1).strip() if title else ""
+            d = re.sub(r"<[^>]+>", "", desc.group(1)).strip()[:200] if desc else ""
+            if t:
+                lines.append(f"  • {t}" + (f": {d}" if d else ""))
+        return "\n".join(lines) if len(lines) > 1 else None
     except Exception:
         pass
     return None
@@ -168,7 +176,16 @@ def get_realtime_context(text):
     ])
     needs_news = any(k in text_low for k in [
         "noticia", "infobae", "qué pasó", "que paso", "último", "ultimo",
-        "ahora", "reciente", "hoy", "actualidad", "novedades"
+        "ahora", "reciente", "hoy", "actualidad", "novedades",
+        "gobierno", "presidente", "milei", "javier", "kicillof", "villarruel",
+        "caputo", "francos", "bullrich", "adorni", "congreso", "senado",
+        "diputados", "ministerio", "ministro", "secretaría", "secretaria",
+        "casa rosada", "nación", "nacion", "política", "politica",
+        "kirchner", "cristina", "peronismo", "peronista", "oposición", "oposicion",
+        "elecciones", "elección", "eleccion", "candidato", "partido",
+        "economía", "economia", "inflación", "inflacion", "pobreza",
+        "seguridad", "crimen", "policía", "policia", "juicio", "juez",
+        "suprema corte", "corte suprema", "justicia"
     ])
 
     if needs_dollar:
