@@ -6,29 +6,14 @@ import sqlite3
 import random
 import logging
 import asyncio
-import threading
 import urllib.request
 from datetime import datetime, timedelta, timezone, time as dtime
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler,
     ChatMemberHandler, filters
 )
-
-# ── Health check (Replit deployment) ────────────────────
-class _Health(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def log_message(self, *a): pass
-
-threading.Thread(
-    target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 8080))), _Health).serve_forever(),
-    daemon=True
-).start()
 
 # ── Config ──────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -752,13 +737,92 @@ def build_app():
 
     return app
 
-if __name__ == "__main__":
-    import time
-    while True:
+async def _http_serve(tg_app, webhook_path, port):
+    """Servidor HTTP asíncrono: health check (GET) + webhook de Telegram (POST)."""
+    async def handle(reader, writer):
         try:
-            print("MogoliBOT + Agente corriendo...")
-            app = build_app()
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            # Leer headers
+            raw = b""
+            while b"\r\n\r\n" not in raw:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=10)
+                if not chunk:
+                    break
+                raw += chunk
+            head, _, rest = raw.partition(b"\r\n\r\n")
+            head_text = head.decode("utf-8", errors="ignore")
+            first_line = head_text.split("\r\n")[0]
+            parts  = first_line.split(" ")
+            method = parts[0] if parts else ""
+            path   = parts[1] if len(parts) > 1 else ""
+            # Leer body según Content-Length
+            content_length = 0
+            for line in head_text.split("\r\n"):
+                if line.lower().startswith("content-length:"):
+                    content_length = int(line.split(":", 1)[1].strip())
+                    break
+            body = rest
+            while len(body) < content_length:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=10)
+                if not chunk:
+                    break
+                body += chunk
+            # Despachar
+            if method == "POST" and path == webhook_path and body:
+                try:
+                    data   = json.loads(body)
+                    update = Update.de_json(data, tg_app.bot)
+                    asyncio.create_task(tg_app.process_update(update))
+                except Exception as e:
+                    logging.error(f"Webhook process error: {e}")
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK")
+            await writer.drain()
         except Exception as e:
-            print(f"Error crítico: {e} — reiniciando en 5 segundos...")
-            time.sleep(5)
+            logging.debug(f"HTTP handler: {e}")
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    server = await asyncio.start_server(handle, "0.0.0.0", port)
+    return server
+
+
+async def main():
+    print("MogoliBOT + Agente corriendo...")
+    app  = build_app()
+    port = int(os.environ.get("PORT", 8080))
+
+    # Detectar si estamos en el deployment de producción.
+    # REPLIT_DOMAINS tiene el dominio de producción (.replit.app).
+    # REPLIT_DEV_DOMAIN es solo el preview del workspace (no producción).
+    dev_domain      = (os.environ.get("REPLIT_DEV_DOMAIN") or "").strip()
+    all_domains     = [d.strip() for d in (os.environ.get("REPLIT_DOMAINS") or "").split(",") if d.strip()]
+    prod_domains    = [d for d in all_domains if d.endswith(".replit.app") and d != dev_domain]
+    prod_domain     = prod_domains[0] if prod_domains else ""
+
+    if prod_domain:
+        # ── PRODUCCIÓN: webhook ──────────────────────────────
+        token_slug   = TELEGRAM_TOKEN[-12:].replace(":", "")
+        webhook_path = f"/tg/{token_slug}"
+        webhook_url  = f"https://{prod_domain}{webhook_path}"
+        async with app:
+            await app.start()
+            await app.bot.set_webhook(webhook_url, drop_pending_updates=True,
+                                      allowed_updates=list(Update.ALL_TYPES))
+            print(f"Webhook activo: {webhook_url}")
+            server = await _http_serve(app, webhook_path, port)
+            async with server:
+                await server.serve_forever()
+    else:
+        # ── DESARROLLO: polling ──────────────────────────────
+        async with app:
+            await app.start()
+            await app.updater.start_polling(drop_pending_updates=True,
+                                            allowed_updates=Update.ALL_TYPES)
+            print("Polling activo (modo desarrollo)")
+            await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
