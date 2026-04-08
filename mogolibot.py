@@ -258,6 +258,13 @@ def init_db():
           PRIMARY KEY (chat_id, day, user_id),
           FOREIGN KEY (chat_id, user_id) REFERENCES users(chat_id, user_id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS down_picks (
+          chat_id INTEGER NOT NULL,
+          day     DATE    NOT NULL,
+          user_id INTEGER NOT NULL,
+          username TEXT,
+          PRIMARY KEY (chat_id, day)
+        );
         """)
     print("DB OK")
 
@@ -330,14 +337,24 @@ def mark_selection_today(chat_id, user_id, day):
 
 def get_today_down(chat_id, day):
     with db() as conn:
-        row = conn.execute("""
-            SELECT d.user_id, COALESCE(u.username,'')
-            FROM daily_selection d
-            JOIN users u ON u.chat_id = d.chat_id AND u.user_id = d.user_id
-            WHERE d.chat_id = ? AND d.day = ?
-            LIMIT 1
-        """, (chat_id, str(day))).fetchone()
+        row = conn.execute(
+            "SELECT user_id, COALESCE(username,'') FROM down_picks WHERE chat_id=? AND day=?",
+            (chat_id, str(day))
+        ).fetchone()
     return row  # (user_id, username) or None
+
+def try_set_today_down(chat_id, day, user_id, username):
+    """Intenta guardar la selección del día. Devuelve (user_id, username) del ganador real."""
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO down_picks (chat_id, day, user_id, username) VALUES (?,?,?,?)",
+            (chat_id, str(day), user_id, username)
+        )
+        row = conn.execute(
+            "SELECT user_id, COALESCE(username,'') FROM down_picks WHERE chat_id=? AND day=?",
+            (chat_id, str(day))
+        ).fetchone()
+    return row
 
 def list_today_highlights(chat_id, day):
     with db() as conn:
@@ -547,6 +564,7 @@ async def down(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = update.effective_user
     seen_user(chat.id, sender.id, sender.username)
     day = today_key()
+    # Verificar si ya hay un mogólico elegido hoy
     existing = get_today_down(chat.id, day)
     if existing:
         uid, uname = existing
@@ -556,13 +574,16 @@ async def down(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return
+    # Elegir candidato y guardar atómicamente
     candidates = get_recent_users(chat.id)
     if not candidates:
         await update.message.reply_text("No encuentro usuarios activos en la última semana.")
         return
     uid, uname = random.choice(candidates)
-    mention = format_mention(uid, uname)
-    mark_selection_today(chat.id, uid, day)
+    # try_set_today_down inserta solo si no existe; devuelve quien quedó guardado
+    winner_id, winner_uname = try_set_today_down(chat.id, day, uid, uname)
+    mention = format_mention(winner_id, winner_uname)
+    mark_selection_today(chat.id, winner_id, day)
     await update.message.reply_text(f"El mogólico del día es {mention}", parse_mode=ParseMode.MARKDOWN)
 
 async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
