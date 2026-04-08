@@ -328,6 +328,17 @@ def mark_selection_today(chat_id, user_id, day):
         conn.execute("INSERT OR IGNORE INTO daily_selection (chat_id, day, user_id) VALUES (?, ?, ?)",
                      (chat_id, str(day), user_id))
 
+def get_today_down(chat_id, day):
+    with db() as conn:
+        row = conn.execute("""
+            SELECT d.user_id, COALESCE(u.username,'')
+            FROM daily_selection d
+            JOIN users u ON u.chat_id = d.chat_id AND u.user_id = d.user_id
+            WHERE d.chat_id = ? AND d.day = ?
+            LIMIT 1
+        """, (chat_id, str(day))).fetchone()
+    return row  # (user_id, username) or None
+
 def list_today_highlights(chat_id, day):
     with db() as conn:
         rec = conn.execute("""
@@ -535,14 +546,24 @@ async def down(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     sender = update.effective_user
     seen_user(chat.id, sender.id, sender.username)
+    day = today_key()
+    existing = get_today_down(chat.id, day)
+    if existing:
+        uid, uname = existing
+        mention = format_mention(uid, uname)
+        await update.message.reply_text(
+            f"Ya está elegido el mogólico de hoy: {mention}\nCambia a las 21hs Argentina.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
     candidates = get_recent_users(chat.id)
     if not candidates:
         await update.message.reply_text("No encuentro usuarios activos en la última semana.")
         return
     uid, uname = random.choice(candidates)
     mention = format_mention(uid, uname)
+    mark_selection_today(chat.id, uid, day)
     await update.message.reply_text(f"El mogólico del día es {mention}", parse_mode=ParseMode.MARKDOWN)
-    mark_selection_today(chat.id, uid, today_key())
 
 async def regalar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
