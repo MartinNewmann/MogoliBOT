@@ -313,6 +313,14 @@ def get_recent_users(chat_id):
         """, (chat_id, cutoff.isoformat())).fetchall()
     return [(uid, uname) for uid, uname in rows if (uname or "").lower() not in IMMUNE_USERS]
 
+def get_active_groups():
+    """Devuelve lista de chat_ids de grupos activos (chat_id < 0 en Telegram)."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT chat_id FROM users WHERE chat_id < 0"
+        ).fetchall()
+    return [r[0] for r in rows]
+
 def ensure_stats_row(chat_id, user_id, day):
     with db() as conn:
         conn.execute("INSERT OR IGNORE INTO daily_stats (chat_id, user_id, day) VALUES (?, ?, ?)",
@@ -746,11 +754,30 @@ def do_daily_reset(context: ContextTypes.DEFAULT_TYPE):
     with db() as conn:
         conn.execute("UPDATE users SET balance=?", (DAILY_START_BALANCE,))
 
+# ── "Decime cosas lindas" job ─────────────────────────────
+_LINDAS_MSGS = [
+    "Decime cosas lindas.",
+    "decime algo lindo, dale.",
+    "no me vas a decir nada lindo hoy?",
+]
+_lindas_idx = 0
+
+async def send_lindas(context: ContextTypes.DEFAULT_TYPE):
+    global _lindas_idx
+    msg = _LINDAS_MSGS[_lindas_idx % len(_LINDAS_MSGS)]
+    _lindas_idx += 1
+    for chat_id in get_active_groups():
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=msg)
+        except Exception:
+            pass
+
 # ── Main ─────────────────────────────────────────────────
 def build_app():
     init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.job_queue.run_daily(do_daily_reset, time=RESET_UTC_TIME, name="daily_reset")
+    app.job_queue.run_repeating(send_lindas, interval=8 * 3600, first=8 * 3600, name="lindas")
 
     app.add_handler(CommandHandler("start",     start))
     app.add_handler(CommandHandler("comandos",  comandos))
