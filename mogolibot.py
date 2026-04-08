@@ -816,12 +816,23 @@ async def main():
                 await server.serve_forever()
     else:
         # ── DESARROLLO: polling ──────────────────────────────
+        # Antes de arrancar, verificar que no haya un webhook de producción activo.
+        # Si hay uno (.replit.app) no lo pisamos; el deployment está a cargo.
         async with app:
-            await app.start()
-            await app.updater.start_polling(drop_pending_updates=True,
-                                            allowed_updates=Update.ALL_TYPES)
-            print("Polling activo (modo desarrollo)")
-            await asyncio.Event().wait()
+            wh = await app.bot.get_webhook_info()
+            if wh.url and ".replit.app" in wh.url:
+                print(f"Bot ya activo vía webhook de producción: {wh.url}")
+                print("No inicio polling para no interferir con el deployment.")
+                # Mantenemos el servidor HTTP para el health check y esperamos
+                server = await _http_serve(app, "/dev-noop", port)
+                async with server:
+                    await server.serve_forever()
+            else:
+                await app.start()
+                await app.updater.start_polling(drop_pending_updates=True,
+                                                allowed_updates=Update.ALL_TYPES)
+                print("Polling activo (modo desarrollo)")
+                await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
